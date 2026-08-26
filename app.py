@@ -88,12 +88,14 @@ def init_db():
         if "token" not in cols:
             db.execute("ALTER TABLE people ADD COLUMN token TEXT")
 
-        # Наполняем людей (имена не перезатираем, если игрок уже есть)
+        # Наполняем людей. Имена всегда синхронизируем с PEOPLE,
+        # чтобы после смены имён в коде они обновились и на Render.
         for pid, name in PEOPLE:
             db.execute(
                 "INSERT OR IGNORE INTO people (id, name) VALUES (?, ?)",
                 (pid, name),
             )
+            db.execute("UPDATE people SET name=? WHERE id=?", (name, pid))
 
         # Выдаём токен каждому, у кого его ещё нет
         for row in db.execute("SELECT id FROM people WHERE token IS NULL OR token = ''"):
