@@ -29,7 +29,7 @@ body {
 header h1 { margin: 0 0 6px; font-size: 26px; }
 .sub { color: var(--muted); margin: 0 0 22px; font-size: 14px; }
 
-/* Лидерборд */
+/* Р›РёРґРµСЂР±РѕСЂРґ */
 .leaderboard {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -70,7 +70,7 @@ header h1 { margin: 0 0 6px; font-size: 26px; }
 }
 .pct { font-size: 13px; color: var(--muted); margin-top: 6px; }
 
-/* Округа */
+/* РћРєСЂСѓРіР° */
 .district { margin-bottom: 26px; }
 .district h2 {
     font-size: 18px;
@@ -123,7 +123,7 @@ tbody tr:hover td.on { background: var(--on-soft); }
 
 footer { color: var(--muted); font-size: 13px; margin-top: 30px; text-align: center; }
 
-/* Тост */
+/* РўРѕСЃС‚ */
 .toast {
     position: fixed;
     bottom: 24px;
