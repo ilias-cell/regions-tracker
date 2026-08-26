@@ -10,16 +10,36 @@
 <div class="wrap">
     <header>
         <h1>🗺️ Кто больше объездил Россию</h1>
-        <p class="sub">Всего субъектов РФ: <b>{{ total_regions }}</b>. Отмечайте посещённые регионы, кликая по ячейкам.</p>
+        <p class="sub">Всего субъектов РФ: <b>{{ total_regions }}</b>.</p>
     </header>
+
+    {% if editor %}
+    <!-- Баннер режима редактирования -->
+    <div class="banner edit-mode">
+        <div>
+            ✏️ Режим редактирования: вы — <b>{{ editor.name }}</b>.
+            Кликайте по своему столбцу, чтобы отмечать регионы. Остальные столбцы только для чтения.
+        </div>
+        <div class="mylink">
+            <span>Ваша личная ссылка:</span>
+            <input id="mylink" readonly value="{{ url_for('edit', token=editor.token, _external=True) }}">
+            <button id="copy-link" type="button">Копировать</button>
+        </div>
+        <a class="view-link" href="{{ url_for('index') }}">← вернуться к общему просмотру</a>
+    </div>
+    {% else %}
+    <!-- Публичный режим -->
+    <div class="banner read-mode">
+        👁️ Режим просмотра. Таблица доступна только для чтения.
+        Чтобы отмечать регионы, откройте свою персональную ссылку.
+    </div>
+    {% endif %}
 
     <!-- Сводка / лидерборд -->
     <section class="leaderboard">
-        {% set ranking = people | sort(attribute='id') %}
         {% for p in people %}
-        <div class="card" data-person="{{ p.id }}">
-            <input class="name-input" data-person="{{ p.id }}"
-                   value="{{ p.name }}" maxlength="40" title="Кликните, чтобы переименовать">
+        <div class="card {{ 'me' if p.id == edit_person_id else '' }}" data-person="{{ p.id }}">
+            <div class="name">{{ p.name }}{% if p.id == edit_person_id %} <span class="you">(вы)</span>{% endif %}</div>
             <div class="score"><span class="count" id="count-{{ p.id }}">{{ totals[p.id] }}</span> / {{ total_regions }}</div>
             <div class="bar">
                 <div class="bar-fill" id="bar-{{ p.id }}"
@@ -34,6 +54,117 @@
     {% for district in districts %}
     <section class="district">
         <h2>{{ district }} ФО
+            <span class="dcount">{{ by_district[district] | length }} рег.</span>
+        </h2>
+        <div class="table-scroll">
+        <table>
+            <thead>
+                <tr>
+                    <th class="region-col">Регион</th>
+                    {% for p in people %}
+                    <th class="person-col {{ 'me' if p.id == edit_person_id else '' }}" title="{{ p.name }}">{{ p.name }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for reg in by_district[district] %}
+                <tr>
+                    <td class="region-col">{{ reg.name }}</td>
+                    {% for p in people %}
+                    {% set on = (p.id, reg.code) in visited %}
+                    {% set editable = (p.id == edit_person_id) %}
+                    <td class="cell {{ 'on' if on else '' }} {{ 'editable' if editable else 'locked' }}"
+                        data-person="{{ p.id }}"
+                        data-region="{{ reg.code }}"
+                        {% if editable %}role="button" tabindex="0"{% endif %}>
+                        {{ '✓' if on else '' }}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </section>
+    {% endfor %}
+
+    <footer>
+        {% if editor %}
+        <p>Изменения сохраняются автоматически.</p>
+        {% else %}
+        <p>Только просмотр. Редактирование — по персональной ссылке игрока.</p>
+        {% endif %}
+    </footer>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const TOTAL = {{ total_regions }};
+const TOKEN = {{ (editor.token | tojson) if editor else 'null' }};
+
+async function postForm(url, data) {
+    const body = new URLSearchParams(data);
+    const res = await fetch(url, { method: 'POST', body });
+    if (!res.ok) throw new Error('http ' + res.status);
+    return res.json();
+}
+
+function updatePerson(pid, total) {
+    const pct = (total / TOTAL * 100);
+    document.getElementById('count-' + pid).textContent = total;
+    document.getElementById('bar-' + pid).style.width = pct.toFixed(1) + '%';
+    document.getElementById('pct-' + pid).textContent = pct.toFixed(1) + '%';
+}
+
+// Клики доступны только в режиме редактирования и только по своим ячейкам
+if (TOKEN) {
+    document.querySelectorAll('.cell.editable').forEach(cell => {
+        const handler = async () => {
+            const region = cell.dataset.region;
+            const pid = cell.dataset.person;
+            cell.classList.add('loading');
+            try {
+                const r = await postForm('/toggle', { token: TOKEN, region_code: region });
+                cell.classList.toggle('on', r.visited);
+                cell.textContent = r.visited ? '✓' : '';
+                updatePerson(pid, r.total);
+            } catch (e) {
+                showToast('Ошибка сохранения');
+            } finally {
+                cell.classList.remove('loading');
+            }
+        };
+        cell.addEventListener('click', handler);
+        cell.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
+        });
+    });
+
+    // Копирование личной ссылки
+    const btn = document.getElementById('copy-link');
+    if (btn) btn.addEventListener('click', async () => {
+        const inp = document.getElementById('mylink');
+        try {
+            await navigator.clipboard.writeText(inp.value);
+        } catch (e) {
+            inp.select(); document.execCommand('copy');
+        }
+        showToast('Ссылка скопирована');
+    });
+}
+
+let toastTimer;
+function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+</script>
+</body>
+</html>
             <span class="dcount">{{ by_district[district] | length }} рег.</span>
         </h2>
         <div class="table-scroll">
