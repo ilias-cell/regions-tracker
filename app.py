@@ -2,13 +2,18 @@
 """Семейный трекер посещённых регионов России.
 
 Flask + SQLite. Готов к деплою на Render.com.
+
+Режимы доступа:
+  /                — публичная страница, только чтение
+  /edit/<token>    — персональная ссылка игрока, редактирование только своих регионов
 """
 import os
+import secrets
 import sqlite3
 from contextlib import closing
 
 from flask import (
-    Flask, g, render_template, request, redirect, url_for, jsonify
+    Flask, g, render_template, request, redirect, url_for, jsonify, abort
 )
 
 from regions_data import REGIONS, DISTRICT_ORDER
@@ -21,11 +26,16 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "tra
 
 # Участники соревнования. Можно поменять имена здесь.
 PEOPLE = [
-    (1, "Игрок 1"),
-    (2, "Игрок 2"),
-    (3, "Игрок 3"),
-    (4, "Игрок 4"),
+    (1, "Илья"),
+    (2, "Катя"),
+    (3, "Кирилл"),
+    (4, "Данил"),
 ]
+
+
+def make_token():
+    """Случайный URL-безопасный токен для персональной ссылки."""
+    return secrets.token_urlsafe(12)
 
 
 # --------------------------------------------------------------------------- #
@@ -46,13 +56,15 @@ def close_db(exc):
 
 
 def init_db():
-    """Создаёт таблицы и наполняет справочники, если БД пустая."""
+    """Создаёт таблицы, наполняет справочники и делает миграции."""
     with closing(sqlite3.connect(DB_PATH)) as db:
+        db.row_factory = sqlite3.Row
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS people (
-                id   INTEGER PRIMARY KEY,
-                name TEXT NOT NULL
+                id    INTEGER PRIMARY KEY,
+                name  TEXT NOT NULL,
+                token TEXT
             );
 
             CREATE TABLE IF NOT EXISTS regions (
@@ -71,11 +83,23 @@ def init_db():
             """
         )
 
-        # Наполняем людей
+        # --- Миграция: если БД была создана старой версией без колонки token ---
+        cols = [r["name"] for r in db.execute("PRAGMA table_info(people)")]
+        if "token" not in cols:
+            db.execute("ALTER TABLE people ADD COLUMN token TEXT")
+
+        # Наполняем людей (имена не перезатираем, если игрок уже есть)
         for pid, name in PEOPLE:
             db.execute(
                 "INSERT OR IGNORE INTO people (id, name) VALUES (?, ?)",
                 (pid, name),
+            )
+
+        # Выдаём токен каждому, у кого его ещё нет
+        for row in db.execute("SELECT id FROM people WHERE token IS NULL OR token = ''"):
+            db.execute(
+                "UPDATE people SET token=? WHERE id=?",
+                (make_token(), row["id"]),
             )
 
         # Наполняем регионы
@@ -134,21 +158,66 @@ def load_state():
     }
 
 
+def person_by_token(token):
+    """Возвращает игрока по токену или None."""
+    if not token:
+        return None
+    row = get_db().execute(
+        "SELECT id, name, token FROM people WHERE token=?", (token,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
 # --------------------------------------------------------------------------- #
 #  Маршруты
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
+    """Публичная страница — только чтение."""
     state = load_state()
-    return render_template("index.html", **state)
+    return render_template(
+        "index.html",
+        editor=None,          # никто не редактирует
+        edit_person_id=None,
+        **state,
+    )
+
+
+@app.route("/edit/<token>")
+def edit(token):
+    """Персональная страница игрока — можно менять только свои регионы."""
+    editor = person_by_token(token)
+    if editor is None:
+        abort(404)
+    state = load_state()
+    return render_template(
+        "index.html",
+        editor=editor,                 # объект игрока-редактора
+        edit_person_id=editor["id"],   # чьи ячейки кликабельны
+        **state,
+    )
 
 
 @app.route("/toggle", methods=["POST"])
 def toggle():
-    """Переключает статус посещения региона игроком (AJAX)."""
-    person_id = int(request.form["person_id"])
-    region_code = request.form["region_code"]
+    """Переключает статус посещения региона игроком (AJAX).
+
+    Разрешено только владельцу токена и только для СВОИХ регионов.
+    """
+    token = request.form.get("token", "")
+    region_code = request.form.get("region_code", "")
+
+    editor = person_by_token(token)
+    if editor is None:
+        return jsonify({"error": "forbidden"}), 403
+
+    person_id = editor["id"]  # берём id из токена, а НЕ из формы — защита от подмены
+
     db = get_db()
+
+    # Проверяем, что регион существует
+    if not db.execute("SELECT 1 FROM regions WHERE code=?", (region_code,)).fetchone():
+        return jsonify({"error": "bad region"}), 400
 
     exists = db.execute(
         "SELECT 1 FROM visits WHERE person_id=? AND region_code=?",
@@ -174,18 +243,7 @@ def toggle():
         (person_id,),
     ).fetchone()["c"]
 
-    return jsonify({"visited": visited, "total": total})
-
-
-@app.route("/rename", methods=["POST"])
-def rename():
-    """Переименование игрока."""
-    person_id = int(request.form["person_id"])
-    name = request.form.get("name", "").strip() or f"Игрок {person_id}"
-    db = get_db()
-    db.execute("UPDATE people SET name=? WHERE id=?", (name[:40], person_id))
-    db.commit()
-    return redirect(url_for("index"))
+    return jsonify({"visited": visited, "total": total, "person_id": person_id})
 
 
 # Инициализируем БД при импорте (важно для gunicorn на Render)
