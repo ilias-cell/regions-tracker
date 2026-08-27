@@ -253,5 +253,10 @@ init_db()
 
 
 if __name__ == "__main__":
+    with closing(sqlite3.connect(DB_PATH)) as db:
+        db.row_factory = sqlite3.Row
+        print("\n=== Персональные ссылки ===")
+        for r in db.execute("SELECT id, name, token FROM people"):
+            print(f"{r['name']}: {url_for('edit', token=r['token'], _external=True)}")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
