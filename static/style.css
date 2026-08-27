@@ -29,7 +29,7 @@ body {
 header h1 { margin: 0 0 6px; font-size: 26px; }
 .sub { color: var(--muted); margin: 0 0 22px; font-size: 14px; }
 
-/* Р›РёРґРµСЂР±РѕСЂРґ */
+/* Лидерборд */
 .leaderboard {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -42,18 +42,13 @@ header h1 { margin: 0 0 6px; font-size: 26px; }
     border-radius: 14px;
     padding: 16px;
 }
-.name-input {
-    width: 100%;
-    background: transparent;
-    border: none;
-    border-bottom: 1px dashed transparent;
-    color: var(--text);
+.card.me { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.name {
     font-size: 17px;
     font-weight: 600;
     padding: 2px 0;
-    outline: none;
 }
-.name-input:hover, .name-input:focus { border-bottom-color: var(--accent); }
+.name .you { color: var(--accent); font-size: 13px; font-weight: 500; }
 .score { font-size: 22px; font-weight: 700; margin: 10px 0 8px; }
 .score .count { color: var(--accent); }
 .bar {
@@ -70,7 +65,7 @@ header h1 { margin: 0 0 6px; font-size: 26px; }
 }
 .pct { font-size: 13px; color: var(--muted); margin-top: 6px; }
 
-/* РћРєСЂСѓРіР° */
+/* Округа */
 .district { margin-bottom: 26px; }
 .district h2 {
     font-size: 18px;
@@ -106,15 +101,18 @@ thead th {
     color: var(--text);
 }
 th.person-col { min-width: 90px; font-size: 13px; }
+th.person-col.me { color: var(--accent); background: #2a3b52; }
 
 .cell {
-    cursor: pointer;
     font-weight: 700;
     color: var(--on);
     user-select: none;
     transition: background .15s;
 }
-.cell:hover { background: rgba(56, 189, 248, 0.12); }
+/* Кликабельны только свои ячейки в режиме редактирования */
+.cell.editable { cursor: pointer; }
+.cell.editable:hover { background: rgba(56, 189, 248, 0.18); }
+.cell.locked { cursor: default; }
 .cell.on { background: var(--on-soft); }
 .cell.loading { opacity: .4; }
 
@@ -123,7 +121,7 @@ tbody tr:hover td.on { background: var(--on-soft); }
 
 footer { color: var(--muted); font-size: 13px; margin-top: 30px; text-align: center; }
 
-/* РўРѕСЃС‚ */
+/* Тост */
 .toast {
     position: fixed;
     bottom: 24px;
@@ -144,3 +142,57 @@ footer { color: var(--muted); font-size: 13px; margin-top: 30px; text-align: cen
     .region-col { min-width: 150px; font-size: 13px; }
     th.person-col { min-width: 60px; font-size: 11px; }
 }
+
+/* Баннеры режимов */
+.banner {
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 24px;
+    font-size: 14px;
+    border: 1px solid var(--line);
+}
+.banner.read-mode {
+    background: rgba(148, 163, 184, 0.10);
+    color: var(--muted);
+}
+.banner.edit-mode {
+    background: rgba(56, 189, 248, 0.10);
+    border-color: var(--accent);
+}
+.banner .mylink {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--muted);
+}
+.banner .mylink input {
+    flex: 1 1 260px;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+.banner .mylink button {
+    background: var(--accent);
+    color: #04263a;
+    border: none;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 8px 16px;
+    cursor: pointer;
+}
+.banner .mylink button:hover { filter: brightness(1.08); }
+.banner .view-link {
+    display: inline-block;
+    margin-top: 10px;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+}
+.banner .view-link:hover { text-decoration: underline; }
