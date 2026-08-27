@@ -8,6 +8,7 @@
     --accent: #38bdf8;
     --on: #22c55e;
     --on-soft: rgba(34, 197, 94, 0.18);
+    --col-player: 72px;  /* фиксированная ширина столбца игрока */
 }
 
 * { box-sizing: border-box; }
@@ -76,31 +77,54 @@ header h1 { margin: 0 0 6px; font-size: 26px; }
 }
 .dcount { font-size: 12px; color: var(--muted); font-weight: 400; }
 
-.table-scroll { overflow-x: auto; border-radius: 12px; border: 1px solid var(--line); }
+.table-scroll {
+    overflow-x: auto;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    -webkit-overflow-scrolling: touch; /* плавный скролл на iOS */
+}
 
 table {
     width: 100%;
     border-collapse: collapse;
     background: var(--panel);
     font-size: 14px;
+    table-layout: fixed; /* фиксированная ширина столбцов */
 }
+
 th, td {
     padding: 9px 10px;
     text-align: center;
     border-bottom: 1px solid var(--line);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
+
 thead th {
     background: var(--panel2);
     position: sticky;
     top: 0;
     font-weight: 600;
+    z-index: 1;
 }
+
+/* Столбец региона — растягивается, остальное фиксировано */
 .region-col {
     text-align: left;
-    min-width: 210px;
+    width: auto; /* займёт оставшееся место */
     color: var(--text);
 }
-th.person-col { min-width: 90px; font-size: 13px; }
+
+/* Столбцы игроков — строго фиксированная ширина */
+th.person-col,
+td.cell {
+    width: var(--col-player);
+    min-width: var(--col-player);
+    max-width: var(--col-player);
+}
+
+th.person-col { font-size: 13px; }
 th.person-col.me { color: var(--accent); background: #2a3b52; }
 
 .cell {
@@ -109,6 +133,7 @@ th.person-col.me { color: var(--accent); background: #2a3b52; }
     user-select: none;
     transition: background .15s;
 }
+
 /* Кликабельны только свои ячейки в режиме редактирования */
 .cell.editable { cursor: pointer; }
 .cell.editable:hover { background: rgba(56, 189, 248, 0.18); }
@@ -135,13 +160,9 @@ footer { color: var(--muted); font-size: 13px; margin-top: 30px; text-align: cen
     opacity: 0;
     pointer-events: none;
     transition: all .25s;
+    z-index: 100;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-@media (max-width: 560px) {
-    .region-col { min-width: 150px; font-size: 13px; }
-    th.person-col { min-width: 60px; font-size: 11px; }
-}
 
 /* Баннеры режимов */
 .banner {
@@ -196,3 +217,55 @@ footer { color: var(--muted); font-size: 13px; margin-top: 30px; text-align: cen
     font-size: 13px;
 }
 .banner .view-link:hover { text-decoration: underline; }
+
+/* Адаптив: мобильные */
+@media (max-width: 640px) {
+    .wrap { padding: 16px 12px 50px; }
+    header h1 { font-size: 22px; }
+    .sub { font-size: 13px; margin-bottom: 18px; }
+    
+    /* Карточки лидерборда на мобильном — 2 колонки */
+    .leaderboard {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 24px;
+    }
+    .card { padding: 12px; }
+    .name { font-size: 15px; }
+    .score { font-size: 20px; margin: 8px 0 6px; }
+    .bar { height: 8px; }
+    .pct { font-size: 12px; }
+
+    /* Таблица: уменьшаем отступы, столбцы игроков уже */
+    :root {
+        --col-player: 56px;
+    }
+    table { font-size: 13px; }
+    th, td { padding: 7px 6px; }
+    th.person-col { font-size: 12px; }
+    .region-col { font-size: 13px; }
+    
+    .district h2 { font-size: 16px; }
+    .dcount { font-size: 11px; }
+    
+    /* Баннер компактнее */
+    .banner { padding: 12px 14px; font-size: 13px; }
+    .banner .mylink { font-size: 12px; }
+    .banner .mylink input { padding: 7px 9px; font-size: 12px; }
+    .banner .mylink button { padding: 7px 14px; font-size: 12px; }
+    
+    footer { font-size: 12px; margin-top: 24px; }
+}
+
+/* Экстра-маленькие экраны (iPhone SE и меньше) */
+@media (max-width: 380px) {
+    /* Лидерборд в одну колонку */
+    .leaderboard { grid-template-columns: 1fr; }
+    
+    /* Столбцы игроков ещё уже */
+    :root {
+        --col-player: 48px;
+    }
+    th.person-col { font-size: 11px; }
+    .region-col { font-size: 12px; }
+}
