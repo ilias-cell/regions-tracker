@@ -1,262 +1,280 @@
-# -*- coding: utf-8 -*-
-"""Семейный трекер посещённых регионов России.
-
-Flask + SQLite. Готов к деплою на Render.com.
-
-Режимы доступа:
-  /                — публичная страница, только чтение
-  /edit/<token>    — персональная ссылка игрока, редактирование только своих регионов
 """
+Family Russia-regions visit tracker.
+
+Authentication model:
+  - GET /              → read-only view (editor=None)
+  - GET /edit/<token>  → personal edit link; only that player's column is editable
+  - POST /toggle       → requires `token` + `region_code`; toggles visit for the token owner
+  - POST /rename       → requires `token` + `name`; renames only the token owner
+"""
+
 import os
-import secrets
 import sqlite3
-from contextlib import closing
+import logging
+from flask import Flask, g, render_template, request, redirect, url_for, jsonify
 
-from flask import (
-    Flask, g, render_template, request, redirect, url_for, jsonify, abort
-)
-
-from regions_data import REGIONS, DISTRICT_ORDER
+from regions_data import REGIONS_BY_DISTRICT
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
 
-# На Render постоянный диск монтируется в /var/data (см. render.yaml).
-# Локально — файл рядом с приложением.
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "tracker.db"))
+DATABASE = os.environ.get("DATABASE_PATH", "visits.db")
 
-# Участники соревнования. Можно поменять имена здесь.
+# ---------------------------------------------------------------------------
+# Fixed player list: (id, display_name, token)
+# Tokens are intentionally opaque strings. Replace with long random values
+# in production (e.g. from `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+# ---------------------------------------------------------------------------
 PEOPLE = [
-    (1, "Илья"),
-    (2, "Катя"),
-    (3, "Кирилл"),
-    (4, "Данил"),
+    (1, "Илья",   "tok_Hv8kQw3mZpLxNbRqYeJdTfUsCgAiOvWn"),
+    (2, "Катя",   "tok_Xr2aNcEdKsFjGhTyUiBvLmPwQoZxRnYp"),
+    (3, "Кирилл", "tok_Dq7wEtYuIoPaSlKjHfGdSzXcVbNmQrTy"),
+    (4, "Данил",  "tok_Mk5vBnCxZaQwErTyUiOpLkJhGfDsApRe"),
 ]
 
+# Quick lookup dicts built at import time (never change at runtime)
+_TOKEN_TO_PERSON = {tok: {"id": pid, "name": name, "token": tok}
+                    for pid, name, tok in PEOPLE}
+_ID_TO_TOKEN     = {pid: tok for pid, name, tok in PEOPLE}
 
-def make_token():
-    """Случайный URL-безопасный токен для персональной ссылки."""
-    return secrets.token_urlsafe(12)
 
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
 
-# --------------------------------------------------------------------------- #
-#  База данных
-# --------------------------------------------------------------------------- #
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-    return g.db
+def get_db() -> sqlite3.Connection:
+    """Return a per-request SQLite connection with Row factory."""
+    db = getattr(g, "_database", None)
+    if db is None:
+        db = g._database = sqlite3.connect(DATABASE)
+        db.row_factory = sqlite3.Row
+    return db
 
 
 @app.teardown_appcontext
 def close_db(exc):
-    db = g.pop("db", None)
+    db = getattr(g, "_database", None)
     if db is not None:
         db.close()
 
 
 def init_db():
-    """Создаёт таблицы, наполняет справочники и делает миграции."""
-    with closing(sqlite3.connect(DB_PATH)) as db:
-        db.row_factory = sqlite3.Row
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS people (
-                id    INTEGER PRIMARY KEY,
-                name  TEXT NOT NULL,
-                token TEXT
-            );
+    """
+    Initialise (or migrate) the database.
 
-            CREATE TABLE IF NOT EXISTS regions (
-                code     TEXT PRIMARY KEY,
-                name     TEXT NOT NULL,
-                district TEXT NOT NULL
-            );
+    Strategy:
+      1. Create tables if they don't exist (token column included from the start).
+      2. If `people` already exists without a `token` column → ALTER TABLE to add it.
+      3. INSERT OR IGNORE the canonical PEOPLE rows (preserves existing names/ids).
+      4. UPDATE token for any row where token IS NULL (fills in after migration).
+      5. Create `visits` table if absent.
+    """
+    db = sqlite3.connect(DATABASE)
+    db.row_factory = sqlite3.Row
 
-            CREATE TABLE IF NOT EXISTS visits (
-                person_id   INTEGER NOT NULL,
-                region_code TEXT NOT NULL,
-                PRIMARY KEY (person_id, region_code),
-                FOREIGN KEY (person_id)   REFERENCES people(id),
-                FOREIGN KEY (region_code) REFERENCES regions(code)
-            );
-            """
+    # -- ensure people table exists with token column -----------------------
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS people (
+            id    INTEGER PRIMARY KEY,
+            name  TEXT    NOT NULL,
+            token TEXT    UNIQUE
+        )
+    """)
+
+    # -- migrate: add token column if missing (idempotent) ------------------
+    existing_cols = {row["name"] for row in db.execute("PRAGMA table_info(people)")}
+    if "token" not in existing_cols:
+        app.logger.info("Migrating people table: adding token column")
+        db.execute("ALTER TABLE people ADD COLUMN token TEXT")
+
+    # -- ensure visits table exists -----------------------------------------
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS visits (
+            person_id   INTEGER NOT NULL,
+            region_code TEXT    NOT NULL,
+            PRIMARY KEY (person_id, region_code),
+            FOREIGN KEY (person_id) REFERENCES people(id)
+        )
+    """)
+
+    db.commit()
+
+    # -- seed canonical people rows (preserve existing data) ----------------
+    for pid, name, tok in PEOPLE:
+        db.execute(
+            "INSERT OR IGNORE INTO people (id, name, token) VALUES (?, ?, ?)",
+            (pid, name, tok),
         )
 
-        # --- Миграция: если БД была создана старой версией без колонки token ---
-        cols = [r["name"] for r in db.execute("PRAGMA table_info(people)")]
-        if "token" not in cols:
-            db.execute("ALTER TABLE people ADD COLUMN token TEXT")
+    # -- backfill tokens for rows that were inserted before migration -------
+    for pid, name, tok in PEOPLE:
+        db.execute(
+            "UPDATE people SET token = ? WHERE id = ? AND token IS NULL",
+            (tok, pid),
+        )
 
-        # Наполняем людей. Имена всегда синхронизируем с PEOPLE,
-        # чтобы после смены имён в коде они обновились и на Render.
-        for pid, name in PEOPLE:
-            db.execute(
-                "INSERT OR IGNORE INTO people (id, name) VALUES (?, ?)",
-                (pid, name),
-            )
-            db.execute("UPDATE people SET name=? WHERE id=?", (name, pid))
-
-        # Выдаём токен каждому, у кого его ещё нет
-        for row in db.execute("SELECT id FROM people WHERE token IS NULL OR token = ''"):
-            db.execute(
-                "UPDATE people SET token=? WHERE id=?",
-                (make_token(), row["id"]),
-            )
-
-        # Наполняем регионы
-        for code, name, district in REGIONS:
-            db.execute(
-                "INSERT OR IGNORE INTO regions (code, name, district) VALUES (?, ?, ?)",
-                (code, name, district),
-            )
-        db.commit()
+    db.commit()
+    db.close()
+    app.logger.info("Database initialised (or already up to date)")
 
 
-# --------------------------------------------------------------------------- #
-#  Вспомогательные запросы
-# --------------------------------------------------------------------------- #
-def load_state():
-    """Возвращает данные для отрисовки сводной таблицы."""
-    db = get_db()
+# ---------------------------------------------------------------------------
+# Shared query helpers
+# ---------------------------------------------------------------------------
 
-    people = [dict(r) for r in db.execute(
-        "SELECT id, name FROM people ORDER BY id"
-    )]
+def _load_view_data(db: sqlite3.Connection) -> dict:
+    """
+    Return everything the index template needs:
+      people        – list of Row objects from the DB
+      by_district   – OrderedDict from regions_data
+      visited       – set of (person_id, region_code) tuples
+      totals        – {person_id: count}
+      total_regions – total distinct regions in the data set
+    """
+    people       = db.execute("SELECT id, name FROM people ORDER BY id").fetchall()
+    visit_rows   = db.execute("SELECT person_id, region_code FROM visits").fetchall()
+    visited      = {(r["person_id"], r["region_code"]) for r in visit_rows}
+    totals       = {p["id"]: sum(1 for v in visit_rows if v["person_id"] == p["id"])
+                    for p in people}
+    total_regions = sum(len(regions) for regions in REGIONS_BY_DISTRICT.values())
 
-    regions = [dict(r) for r in db.execute(
-        "SELECT code, name, district FROM regions"
-    )]
-
-    visited = set()
-    for row in db.execute("SELECT person_id, region_code FROM visits"):
-        visited.add((row["person_id"], row["region_code"]))
-
-    # Группируем регионы по округам в правильном порядке
-    by_district = {d: [] for d in DISTRICT_ORDER}
-    for reg in regions:
-        by_district.setdefault(reg["district"], []).append(reg)
-
-    # Сохраняем исходный порядок регионов внутри округа (как в REGIONS)
-    order = {code: i for i, (code, _, _) in enumerate(REGIONS)}
-    for d in by_district:
-        by_district[d].sort(key=lambda r: order.get(r["code"], 999))
-
-    # Считаем итоги по каждому игроку
-    totals = {p["id"]: 0 for p in people}
-    for (pid, _code) in visited:
-        if pid in totals:
-            totals[pid] += 1
-
-    total_regions = len(regions)
-
-    return {
-        "people": people,
-        "by_district": by_district,
-        "districts": DISTRICT_ORDER,
-        "visited": visited,
-        "totals": totals,
-        "total_regions": total_regions,
-    }
-
-
-def person_by_token(token):
-    """Возвращает игрока по токену или None."""
-    if not token:
-        return None
-    row = get_db().execute(
-        "SELECT id, name, token FROM people WHERE token=?", (token,)
-    ).fetchone()
-    return dict(row) if row else None
-
-
-# --------------------------------------------------------------------------- #
-#  Маршруты
-# --------------------------------------------------------------------------- #
-@app.route("/")
-def index():
-    """Публичная страница — только чтение."""
-    state = load_state()
-    return render_template(
-        "index.html",
-        editor=None,          # никто не редактирует
-        edit_person_id=None,
-        **state,
+    return dict(
+        people=people,
+        by_district=REGIONS_BY_DISTRICT,
+        visited=visited,
+        totals=totals,
+        total_regions=total_regions,
     )
 
 
+def _person_by_token(db: sqlite3.Connection, token: str):
+    """Return a sqlite3.Row for the person matching `token`, or None."""
+    return db.execute(
+        "SELECT id, name, token FROM people WHERE token = ?", (token,)
+    ).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@app.route("/")
+def index():
+    """Read-only view — no editor context."""
+    db   = get_db()
+    data = _load_view_data(db)
+    return render_template("index.html", editor=None, edit_person_id=None, **data)
+
+
 @app.route("/edit/<token>")
-def edit(token):
-    """Персональная страница игрока — можно менять только свои регионы."""
-    editor = person_by_token(token)
-    if editor is None:
-        abort(404)
-    state = load_state()
+def edit(token: str):
+    """
+    Personal edit link.  Renders the same template but with `editor` set so
+    the frontend can make exactly one column interactive.
+    """
+    db     = get_db()
+    person = _person_by_token(db, token)
+
+    if person is None:
+        # Unknown token → fall back to read-only rather than 404
+        app.logger.warning("Unknown token used for /edit — serving read-only")
+        data = _load_view_data(db)
+        return render_template("index.html", editor=None, edit_person_id=None, **data)
+
+    editor = {"id": person["id"], "name": person["name"], "token": person["token"]}
+    data   = _load_view_data(db)
     return render_template(
         "index.html",
-        editor=editor,                 # объект игрока-редактора
-        edit_person_id=editor["id"],   # чьи ячейки кликабельны
-        **state,
+        editor=editor,
+        edit_person_id=editor["id"],
+        **data,
     )
 
 
 @app.route("/toggle", methods=["POST"])
 def toggle():
-    """Переключает статус посещения региона игроком (AJAX).
-
-    Разрешено только владельцу токена и только для СВОИХ регионов.
     """
-    token = request.form.get("token", "")
-    region_code = request.form.get("region_code", "")
+    Toggle a visit mark for the authenticated player.
 
-    editor = person_by_token(token)
-    if editor is None:
-        return jsonify({"error": "forbidden"}), 403
+    Expected POST body:  token=<str>  region_code=<str>
+    Returns JSON:        {"visited": bool, "total": int}
 
-    person_id = editor["id"]  # берём id из токена, а НЕ из формы — защита от подмены
+    The person_id is derived exclusively from the token — any person_id
+    submitted in the request body is ignored.
+    """
+    token       = request.form.get("token", "").strip()
+    region_code = request.form.get("region_code", "").strip()
 
-    db = get_db()
+    if not token or not region_code:
+        return jsonify({"error": "token and region_code are required"}), 400
 
-    # Проверяем, что регион существует
-    if not db.execute("SELECT 1 FROM regions WHERE code=?", (region_code,)).fetchone():
-        return jsonify({"error": "bad region"}), 400
+    db     = get_db()
+    person = _person_by_token(db, token)
 
-    exists = db.execute(
-        "SELECT 1 FROM visits WHERE person_id=? AND region_code=?",
+    if person is None:
+        return jsonify({"error": "invalid token"}), 403
+
+    person_id = person["id"]
+
+    existing = db.execute(
+        "SELECT 1 FROM visits WHERE person_id = ? AND region_code = ?",
         (person_id, region_code),
     ).fetchone()
 
-    if exists:
+    if existing:
         db.execute(
-            "DELETE FROM visits WHERE person_id=? AND region_code=?",
+            "DELETE FROM visits WHERE person_id = ? AND region_code = ?",
             (person_id, region_code),
         )
-        visited = False
+        now_visited = False
     else:
         db.execute(
             "INSERT INTO visits (person_id, region_code) VALUES (?, ?)",
             (person_id, region_code),
         )
-        visited = True
+        now_visited = True
+
     db.commit()
 
     total = db.execute(
-        "SELECT COUNT(*) AS c FROM visits WHERE person_id=?",
-        (person_id,),
+        "SELECT COUNT(*) AS c FROM visits WHERE person_id = ?", (person_id,)
     ).fetchone()["c"]
 
-    return jsonify({"visited": visited, "total": total, "person_id": person_id})
+    return jsonify({"visited": now_visited, "total": total})
 
 
-# Инициализируем БД при импорте (важно для gunicorn на Render)
-init_db()
+@app.route("/rename", methods=["POST"])
+def rename():
+    """
+    Rename a player.  Identity is established by token only.
 
+    POST body:  token=<str>  name=<str>
+    Returns JSON: {"ok": true, "name": "<new name>"}
+    """
+    token    = request.form.get("token", "").strip()
+    new_name = request.form.get("name", "").strip()
+
+    if not token or not new_name:
+        return jsonify({"error": "token and name are required"}), 400
+
+    db     = get_db()
+    person = _person_by_token(db, token)
+
+    if person is None:
+        return jsonify({"error": "invalid token"}), 403
+
+    db.execute("UPDATE people SET name = ? WHERE id = ?", (new_name, person["id"]))
+    db.commit()
+
+    return jsonify({"ok": True, "name": new_name})
+
+
+# ---------------------------------------------------------------------------
+# Application entry point
+# ---------------------------------------------------------------------------
+
+with app.app_context():
+    init_db()
 
 if __name__ == "__main__":
-    with closing(sqlite3.connect(DB_PATH)) as db:
-        db.row_factory = sqlite3.Row
-        print("\n=== Персональные ссылки ===")
-        for r in db.execute("SELECT id, name, token FROM people"):
-            print(f"{r['name']}: {url_for('edit', token=r['token'], _external=True)}")
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(debug=True)

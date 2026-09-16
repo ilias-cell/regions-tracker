@@ -1,25 +1,25 @@
-# -*- coding: utf-8 -*-
-"""Показывает персональные ссылки всех игроков.
-
-Использование (локально):
-    python show_links.py
-    python show_links.py https://ваш-сайт.onrender.com
-
-На Render можно запустить во вкладке Shell:
-    python show_links.py https://ваш-сайт.onrender.com
 """
+show_links.py — local helper to print personal edit links.
+
+Run this locally (never on Render) to share links with players:
+    python show_links.py [base_url]
+
+Default base_url: http://localhost:5000
+"""
+
 import sys
-import sqlite3
 
-from app import DB_PATH
+BASE_URL = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://localhost:5000"
 
-base = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://localhost:5000"
+# Must stay in sync with PEOPLE in app.py
+PEOPLE = [
+    (1, "Илья",   "tok_Hv8kQw3mZpLxNbRqYeJdTfUsCgAiOvWn"),
+    (2, "Катя",   "tok_Xr2aNcEdKsFjGhTyUiBvLmPwQoZxRnYp"),
+    (3, "Кирилл", "tok_Dq7wEtYuIoPaSlKjHfGdSzXcVbNmQrTy"),
+    (4, "Данил",  "tok_Mk5vBnCxZaQwErTyUiOpLkJhGfDsApRe"),
+]
 
-db = sqlite3.connect(DB_PATH)
-db.row_factory = sqlite3.Row
-
-print("Персональные ссылки для редактирования:\n")
-for r in db.execute("SELECT name, token FROM people ORDER BY id"):
-    print(f"  {r['name']:10} {base}/edit/{r['token']}")
-print("\nОбщая ссылка (только просмотр):")
-print(f"  {base}/")
+print(f"\nПерсональные ссылки редактирования ({BASE_URL}):\n")
+for pid, name, tok in PEOPLE:
+    print(f"  {name:<10}  {BASE_URL}/edit/{tok}")
+print()

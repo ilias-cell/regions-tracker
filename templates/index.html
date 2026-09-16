@@ -1,167 +1,269 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Регионы России — семейное соревнование</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Карта путешествий семьи</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
-<div class="wrap">
-    <header>
-        <h1>🗺️ Кто больше объездил Россию</h1>
-        <p class="sub">Всего субъектов РФ: <b>{{ total_regions }}</b>.</p>
-    </header>
 
-    {% if editor %}
-    <!-- Баннер режима редактирования -->
-    <div class="banner edit-mode">
-        <div>
-            ✏️ Режим редактирования: вы — <b>{{ editor.name }}</b>.
-            Кликайте по своему столбцу, чтобы отмечать регионы. Остальные столбцы только для чтения.
-        </div>
-        <div class="mylink">
-            <span>Ваша личная ссылка:</span>
-            <input id="mylink" readonly value="{{ url_for('edit', token=editor.token, _external=True) }}">
-            <button id="copy-link" type="button">Копировать</button>
-        </div>
-        <a class="view-link" href="{{ url_for('index') }}">← вернуться к общему просмотру</a>
-    </div>
-    {% else %}
-    <!-- Публичный режим -->
-    <div class="banner read-mode">
-        👁️ Режим просмотра. Таблица доступна только для чтения.
-        Чтобы отмечать регионы, откройте свою персональную ссылку.
-    </div>
-    {% endif %}
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODE BANNER
+════════════════��══════════════════════════════════════════════════════ -->
+{% if editor %}
+<div class="banner banner--edit" id="modeBanner">
+  <span class="banner__icon">✏️</span>
+  <span class="banner__text">
+    Режим редактирования — <strong>{{ editor.name }}</strong>.
+    Только ваш столбец активен.
+  </span>
 
-    <!-- Сводка / лидерборд -->
-    <section class="leaderboard">
-        {% for p in people %}
-        <div class="card {{ 'me' if p.id == edit_person_id else '' }}" data-person="{{ p.id }}">
-            <div class="name">{{ p.name }}{% if p.id == edit_person_id %} <span class="you">(вы)</span>{% endif %}</div>
-            <div class="score"><span class="count" id="count-{{ p.id }}">{{ totals[p.id] }}</span> / {{ total_regions }}</div>
-            <div class="bar">
-                <div class="bar-fill" id="bar-{{ p.id }}"
-                     style="width: {{ (totals[p.id] / total_regions * 100) | round(1) }}%"></div>
-            </div>
-            <div class="pct" id="pct-{{ p.id }}">{{ (totals[p.id] / total_regions * 100) | round(1) }}%</div>
-        </div>
-        {% endfor %}
-    </section>
-
-    <!-- Сводная таблица по округам -->
-    {% for district in districts %}
-    <section class="district">
-        <h2>{{ district }} ФО
-            <span class="dcount">{{ by_district[district] | length }} рег.</span>
-        </h2>
-        <div class="table-scroll">
-        <table>
-            <thead>
-                <tr>
-                    <th class="region-col">Регион</th>
-                    {% for p in people %}
-                    <th class="person-col {{ 'me' if p.id == edit_person_id else '' }}" title="{{ p.name }}">{{ p.name }}</th>
-                    {% endfor %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for reg in by_district[district] %}
-                <tr>
-                    <td class="region-col">{{ reg.name }}</td>
-                    {% for p in people %}
-                    {% set on = (p.id, reg.code) in visited %}
-                    {% set editable = (p.id == edit_person_id) %}
-                    <td class="cell {{ 'on' if on else '' }} {{ 'editable' if editable else 'locked' }}"
-                        data-person="{{ p.id }}"
-                        data-region="{{ reg.code }}"
-                        {% if editable %}role="button" tabindex="0"{% endif %}>
-                        {{ '✓' if on else '' }}
-                    </td>
-                    {% endfor %}
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        </div>
-    </section>
-    {% endfor %}
-
-    <footer>
-        {% if editor %}
-        <p>Изменения сохраняются автоматически.</p>
-        {% else %}
-        <p>Только просмотр. Редактирование — по персональной ссылке игрока.</p>
-        {% endif %}
-    </footer>
+  <label class="banner__link-label" for="personalLink">Ваша ссылка:</label>
+  <input
+    id="personalLink"
+    class="banner__link-input"
+    type="text"
+    readonly
+    value="{{ request.url }}"
+  />
+  <button
+    class="banner__copy-btn"
+    type="button"
+    onclick="copyPersonalLink()"
+    aria-label="Скопировать персональную ссылку"
+  >Копировать</button>
 </div>
+{% else %}
+<div class="banner banner--read" id="modeBanner">
+  <span class="banner__icon">👁</span>
+  <span class="banner__text">Режим просмотра — изменения недоступны.</span>
+</div>
+{% endif %}
 
-<div id="toast" class="toast"></div>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     HEADER
+═══════════════════════════════════════════════════════════════════════ -->
+<header class="site-header">
+  <h1>🗺 Карта путешествий</h1>
+  <p class="site-header__sub">Регионы России, которые мы посетили</p>
+</header>
 
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MAIN TABLE
+═══════════════════════════════════════════════════════════════════════ -->
+<main class="table-wrap">
+  <table class="regions-table" aria-label="Посещённые регионы">
+    <thead>
+      <tr>
+        <th class="col-region" scope="col">Регион</th>
+
+        {% for person in people %}
+        <th
+          class="col-player {% if editor and person.id == editor.id %}col-player--mine{% endif %}"
+          scope="col"
+          data-person-id="{{ person.id }}"
+        >
+          {% if editor and person.id == editor.id %}
+          {# Editable name cell #}
+          <span
+            class="player-name player-name--editable"
+            contenteditable="true"
+            spellcheck="false"
+            data-original="{{ person.name }}"
+            data-person-id="{{ person.id }}"
+            onblur="renamePlayer(this)"
+            aria-label="Имя игрока, нажмите для редактирования"
+          >{{ person.name }}</span>
+          {% else %}
+          <span class="player-name">{{ person.name }}</span>
+          {% endif %}
+          <span class="player-total" id="total-{{ person.id }}" aria-label="Посещено регионов">
+            {{ totals[person.id] }} / {{ total_regions }}
+          </span>
+        </th>
+        {% endfor %}
+      </tr>
+    </thead>
+
+    <tbody>
+      {% for district, regions in by_district.items() %}
+
+      {# District header row #}
+      <tr class="district-row">
+        <td colspan="{{ people|length + 1 }}">{{ district }}</td>
+      </tr>
+
+      {% for region in regions %}
+      <tr class="region-row">
+        <td class="cell-region-name">{{ region.name }}</td>
+
+        {% for person in people %}
+        {% set is_visited = (person.id, region.code) in visited %}
+        {% set is_mine    = editor and person.id == editor.id %}
+
+        <td
+          class="cell-check {% if is_mine %}cell-check--editable{% else %}cell-check--locked{% endif %}"
+          data-person-id="{{ person.id }}"
+          data-region-code="{{ region.code }}"
+          {% if is_mine %}
+            role="checkbox"
+            aria-checked="{{ 'true' if is_visited else 'false' }}"
+            tabindex="0"
+            onclick="toggleVisit(this)"
+            onkeydown="handleCheckKeydown(event, this)"
+            aria-label="{{ person.name }} — {{ region.name }}"
+          {% endif %}
+        >
+          {% if is_visited %}
+          <span class="check-mark" aria-hidden="true">✓</span>
+          {% else %}
+          <span class="check-empty" aria-hidden="true"></span>
+          {% endif %}
+        </td>
+        {% endfor %}
+
+      </tr>
+      {% endfor %}
+
+      {% endfor %}
+    </tbody>
+  </table>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TOAST NOTIFICATION
+═══════════════════════════════════════════════════════════════════════ -->
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+     Token is injected server-side; never exposed in read-only mode.
+═══════════════════════════════════════════════════════════════════════ -->
 <script>
-const TOTAL = {{ total_regions }};
-const TOKEN = {{ (editor.token | tojson) if editor else 'null' }};
+  // ── Auth context ──────────────────────────────────────────────────────
+  const EDITOR_TOKEN = {{ ('"' + editor.token + '"') | safe if editor else 'null' }};
+  const EDIT_PERSON_ID = {{ edit_person_id | tojson if edit_person_id else 'null' }};
 
-async function postForm(url, data) {
-    const body = new URLSearchParams(data);
-    const res = await fetch(url, { method: 'POST', body });
-    if (!res.ok) throw new Error('http ' + res.status);
-    return res.json();
-}
+  // ── Toggle visit ──────────────────────────────────────────────────────
+  async function toggleVisit(cell) {
+    if (!EDITOR_TOKEN) return;
 
-function updatePerson(pid, total) {
-    const pct = (total / TOTAL * 100);
-    document.getElementById('count-' + pid).textContent = total;
-    document.getElementById('bar-' + pid).style.width = pct.toFixed(1) + '%';
-    document.getElementById('pct-' + pid).textContent = pct.toFixed(1) + '%';
-}
+    const regionCode = cell.dataset.regionCode;
+    const personId   = parseInt(cell.dataset.personId, 10);
+    if (personId !== EDIT_PERSON_ID) return; // guard: never touch other columns
 
-// Клики доступны только в режиме редактирования и только по своим ячейкам
-if (TOKEN) {
-    document.querySelectorAll('.cell.editable').forEach(cell => {
-        const handler = async () => {
-            const region = cell.dataset.region;
-            const pid = cell.dataset.person;
-            cell.classList.add('loading');
-            try {
-                const r = await postForm('/toggle', { token: TOKEN, region_code: region });
-                cell.classList.toggle('on', r.visited);
-                cell.textContent = r.visited ? '✓' : '';
-                updatePerson(pid, r.total);
-            } catch (e) {
-                showToast('Ошибка сохранения');
-            } finally {
-                cell.classList.remove('loading');
-            }
-        };
-        cell.addEventListener('click', handler);
-        cell.addEventListener('keydown', e => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
-        });
+    cell.classList.add('cell-check--loading');
+    cell.setAttribute('aria-busy', 'true');
+
+    try {
+      const resp = await fetch('/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: EDITOR_TOKEN, region_code: regionCode }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        showToast('Ошибка: ' + (err.error || resp.status), 'error');
+        return;
+      }
+
+      const data = await resp.json();
+
+      // Update cell UI
+      const mark = cell.querySelector('.check-mark, .check-empty');
+      if (data.visited) {
+        mark.className = 'check-mark';
+        mark.textContent = '✓';
+        cell.setAttribute('aria-checked', 'true');
+      } else {
+        mark.className = 'check-empty';
+        mark.textContent = '';
+        cell.setAttribute('aria-checked', 'false');
+      }
+
+      // Update totals counter
+      const totalEl = document.getElementById('total-' + personId);
+      if (totalEl) {
+        const parts = totalEl.textContent.split('/');
+        totalEl.textContent = data.total + ' /' + (parts[1] || '');
+      }
+    } catch (e) {
+      showToast('Сетевая ошибка', 'error');
+    } finally {
+      cell.classList.remove('cell-check--loading');
+      cell.removeAttribute('aria-busy');
+    }
+  }
+
+  // ── Keyboard support for checkbox cells ───────────────────────────────
+  function handleCheckKeydown(event, cell) {
+    if (event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault();
+      toggleVisit(cell);
+    }
+  }
+
+  // ── Rename player ─────────────────────────────────────────────────────
+  async function renamePlayer(el) {
+    if (!EDITOR_TOKEN) return;
+
+    const newName = el.textContent.trim();
+    const original = el.dataset.original || '';
+
+    if (!newName || newName === original) {
+      el.textContent = original; // revert empty edit
+      return;
+    }
+
+    try {
+      const resp = await fetch('/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: EDITOR_TOKEN, name: newName }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        showToast('Ошибка переименования: ' + (err.error || resp.status), 'error');
+        el.textContent = original;
+        return;
+      }
+
+      const data = await resp.json();
+      el.dataset.original = data.name;
+      el.textContent = data.name;
+      showToast('Имя обновлено: ' + data.name, 'success');
+    } catch (e) {
+      showToast('Сетевая ошибка', 'error');
+      el.textContent = original;
+    }
+  }
+
+  // ── Copy personal link ────────────────────────────────────────────────
+  function copyPersonalLink() {
+    const input = document.getElementById('personalLink');
+    if (!input) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+      showToast('Ссылка скопирована!', 'success');
+    }).catch(() => {
+      input.select();
+      document.execCommand('copy');
+      showToast('Ссылка скопирована!', 'success');
     });
+  }
 
-    // Копирование личной ссылки
-    const btn = document.getElementById('copy-link');
-    if (btn) btn.addEventListener('click', async () => {
-        const inp = document.getElementById('mylink');
-        try {
-            await navigator.clipboard.writeText(inp.value);
-        } catch (e) {
-            inp.select(); document.execCommand('copy');
-        }
-        showToast('Ссылка скопирована');
-    });
-}
-
-let toastTimer;
-function showToast(msg) {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
-}
+  // ── Toast helper ──────────────────────────────────────────────────────
+  let _toastTimer = null;
+  function showToast(msg, type = 'info') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast toast--visible toast--' + type;
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+  }
 </script>
+
 </body>
 </html>
